@@ -1,0 +1,164 @@
+# GitHub Actions Workflow: Build and Push Docker Images
+# =============================================================================
+# This workflow automatically builds and pushes multi-architecture Docker images
+# to GitHub Container Registry (GHCR).
+#
+# Target Registry:
+#   - GitHub Container Registry: ghcr.io/<owner>/beam-devbox:<tag>
+#
+# Triggers:
+#   - Push to main branch
+#   - Push tags starting with 'v' (e.g., v1.0.0)
+#   - Pull requests to main (build only, no push)
+#   - Monthly scheduled rebuild (for security updates)
+#
+# Required Permissions:
+#   - packages: write (for pushing to GHCR)
+#   - No additional secrets needed (uses GITHUB_TOKEN automatically)
+#
+# Usage after first push:
+#   docker pull ghcr.io/<your-github-username>/beam-devbox:otp28
+#
+# Example:
+#   docker run -p 5432:5432 -p 9000:9000 ghcr.io/youfun/beam-devbox:otp28
+# =============================================================================
+
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Rebuild monthly to get security updates
+    - cron: '0 0 1 * *'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/beam-devbox
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # OTP 28 + PostgreSQL 18 (latest)
+          - otp_version: "28.0"
+            elixir_version: "1.19.0"
+            postgres_version: "18"
+            erlang_dist_version: "28.4"
+            tags: |
+              type=raw,value=otp28-pg18
+          # OTP 28 + PostgreSQL 17 (stable)
+          - otp_version: "28.0"
+            elixir_version: "1.19.0"
+            postgres_version: "17"
+            erlang_dist_version: "28.4"
+            tags: |
+              type=raw,value=otp28
+              type=raw,value=otp28-pg17
+              type=raw,value=latest
+          # OTP 27 + PostgreSQL 18
+          - otp_version: "27.2"
+            elixir_version: "1.18.0"
+            postgres_version: "18"
+            erlang_dist_version: "27.3.4.8"
+            tags: |
+              type=raw,value=otp27-pg18
+          # OTP 27 + PostgreSQL 17 (LTS)
+          - otp_version: "27.2"
+            elixir_version: "1.18.0"
+            postgres_version: "17"
+            erlang_dist_version: "27.3.4.8"
+            tags: |
+              type=raw,value=otp27
+              type=raw,value=otp27-pg17
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      # Login to GitHub Container Registry (skip on PRs)
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: ${{ matrix.tags }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            OTP_VERSION=${{ matrix.otp_version }}
+            ELIXIR_VERSION=${{ matrix.elixir_version }}
+            POSTGRES_VERSION=${{ matrix.postgres_version }}
+            ERLANG_DIST_VERSION=${{ matrix.erlang_dist_version }}
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Test Docker image
+        run: |
+          # Start the container
+          docker run -d --name test-beam-devbox \
+            -p 5432:5432 \
+            -p 9000:9000 \
+            -p 9001:9001 \
+            ghcr.io/${{ github.repository_owner }}/beam-devbox:otp28
+
+          # Wait for services to be ready
+          echo "Waiting for services to start..."
+          sleep 30
+
+          # Test PostgreSQL
+          echo "Testing PostgreSQL..."
+          docker exec test-beam-devbox pg_isready -U postgres -d app_dev
+
+          # Test MinIO health
+          echo "Testing MinIO..."
+          curl -f http://localhost:9000/minio/health/live || exit 1
+
+          echo "All tests passed!"
+
+          # Cleanup
+          docker stop test-beam-devbox
+          docker rm test-beam-devbox

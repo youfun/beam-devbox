@@ -1,0 +1,14 @@
+#!/command/execlineb -P
+
+# Wait for initialization to complete
+if { s6-svwait -t 30000 /run/service/init-services }
+
+# Export MinIO environment variables
+s6-env MINIO_ROOT_USER="${MINIO_ROOT_USER}"
+s6-env MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}"
+
+# Start MinIO server
+/usr/local/bin/minio server
+  /var/lib/minio/data
+  --address :9000
+  --console-address :9001

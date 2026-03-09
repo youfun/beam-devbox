@@ -1,0 +1,7 @@
+#!/command/execlineb -S0
+
+# Log shutdown
+foreground { echo "MinIO service finished" }
+
+# Exit with the original exit code
+exit ${1}

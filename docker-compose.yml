@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  beam-devbox:
+    image: ghcr.io/youfun/beam-devbox:otp28
+    container_name: beam-devbox
+    hostname: beam-devbox
+    ports:
+      - "5432:5432"      # PostgreSQL
+      - "9000:9000"      # MinIO API
+      - "9001:9001"      # MinIO Console
+      - "8080:8080"      # Application (reserved)
+    environment:
+      # PostgreSQL Configuration
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-app_dev}
+
+      # MinIO Configuration
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-uploads}
+
+      # Application Configuration
+      APP_NAME: ${APP_NAME:-app}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - miniodata:/var/lib/minio/data
+      - ./app:/app
+    healthcheck:
+      test: ["CMD", "sh", "-c", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app_dev} && wget -qO- http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local
+  miniodata:
+    driver: local

@@ -1,0 +1,7 @@
+#!/command/execlineb -P
+
+# Wait for MinIO to be ready
+if { s6-svwait -t 60000 /run/service/minio }
+
+# Run MinIO bucket initialization
+/etc/s6-overlay/scripts/init-minio-buckets.sh

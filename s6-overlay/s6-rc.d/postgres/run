@@ -1,0 +1,15 @@
+#!/command/execlineb -P
+
+# Wait for initialization to complete
+if { s6-svwait -t 30000 /run/service/init-services }
+
+# Set proper permissions
+foreground { s6-setuidgid postgres s6-chown -u postgres /var/lib/postgresql/data }
+foreground { chmod 700 /var/lib/postgresql/data }
+
+# Start PostgreSQL
+s6-setuidgid postgres
+/usr/lib/postgresql/17/bin/postgres
+  -D /var/lib/postgresql/data
+  -c listen_addresses=*
+  -c port=5432
