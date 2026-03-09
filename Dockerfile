@@ -110,13 +110,10 @@ RUN curl -fsSL https://repo.pigsty.io/key | gpg --dearmor -o /usr/share/keyrings
     && echo "deb [signed-by=/usr/share/keyrings/pigsty.gpg] https://repo.pigsty.io/apt/infra generic main" \
     > /etc/apt/sources.list.d/pigsty.list
 
-# For PostgreSQL 18+, use official PGDG repository as Pigsty may not have it yet
-# For PostgreSQL 17, use Pigsty repository
-RUN if [ "${POSTGRES_VERSION}" = "18" ]; then \
-        curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg \
-        && echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-        > /etc/apt/sources.list.d/pgdg.list; \
-    fi \
+# Add PostgreSQL official PGDG repository for all versions
+RUN curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+    > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update
 
 # Install PostgreSQL (from appropriate source) and MinIO from Pigsty
