@@ -142,6 +142,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+        timeout-minutes: 5
 
       - name: Extract metadata
         id: meta
