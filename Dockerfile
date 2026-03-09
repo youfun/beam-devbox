@@ -73,7 +73,7 @@ RUN set -eux; \
 ENV PATH="/usr/local/bin:${PATH}"
 
 # Verify Erlang installation
-RUN erl -version && erlc -version
+RUN which erl && which erlc && erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell
 
 # Build and install Elixir
 WORKDIR /tmp/elixir
