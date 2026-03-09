@@ -103,6 +103,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libncurses6 \
     libssl3 \
     libwxgtk3.2-1 \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Add Pigsty apt repository for MinIO (always available)
