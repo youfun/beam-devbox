@@ -46,10 +46,7 @@ RUN set -eux; \
     curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS"; \
     \
     echo "Verifying checksum..."; \
-    EXPECTED_SHA=$(grep "^${ERLANG_TARBALL}$" "/tmp/SHA256SUMS" | awk '{print $1}' | head -n1); \
-    if [ -z "$EXPECTED_SHA" ]; then \
-        EXPECTED_SHA=$(grep " ${ERLANG_TARBALL}$" "/tmp/SHA256SUMS" | awk '{print $1}' | head -n1); \
-    fi; \
+    EXPECTED_SHA=$(grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | head -1 | awk '{print $1}'); \
     echo "Expected: ${EXPECTED_SHA}"; \
     echo "Actual:   $(sha256sum "/tmp/${ERLANG_TARBALL}" | awk '{print $1}')"; \
     echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c -; \
@@ -57,7 +54,18 @@ RUN set -eux; \
     echo "Extracting..."; \
     mkdir -p /tmp/erlang-extract; \
     tar -xzf "/tmp/${ERLANG_TARBALL}" -C /tmp/erlang-extract; \
-    cp -r /tmp/erlang-extract/erlang-${ERLANG_DIST_VERSION}/usr/local/* /usr/local/; \
+    echo "Archive structure:"; \
+    ls -la /tmp/erlang-extract/; \
+    find /tmp/erlang-extract -maxdepth 3 -type d; \
+    ERLANG_DIR=$(find /tmp/erlang-extract -maxdepth 1 -type d -name "erlang-*" | head -1); \
+    echo "Found Erlang directory: ${ERLANG_DIR}"; \
+    if [ -d "${ERLANG_DIR}/usr/local" ]; then \
+        cp -r "${ERLANG_DIR}/usr/local/"* /usr/local/; \
+    else \
+        echo "ERROR: Expected structure not found. Listing contents:"; \
+        find "${ERLANG_DIR}" -maxdepth 2 -type d; \
+        exit 1; \
+    fi; \
     rm -rf "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" /tmp/erlang-extract; \
     ldconfig
 
