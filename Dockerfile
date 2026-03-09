@@ -30,22 +30,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG ERLANG_DIST_VERSION
 ARG TARGETARCH
 
-RUN case "${TARGETARCH}" in \
-    amd64) ERLANG_ARCH="amd64" ;; \
-    arm64) ERLANG_ARCH="arm64" ;; \
-    *) ERLANG_ARCH="${TARGETARCH}" ;; \
-    esac \
-    && ERLANG_TARBALL="erlang-${ERLANG_DIST_VERSION}-linux-${ERLANG_ARCH}.tar.gz" \
-    && ERLANG_URL="https://github.com/benoitc/erlang-dist/releases/download/OTP-${ERLANG_DIST_VERSION}/${ERLANG_TARBALL}" \
-    && CHECKSUMS_URL="https://github.com/benoitc/erlang-dist/releases/download/OTP-${ERLANG_DIST_VERSION}/SHA256SUMS" \
-    && echo "Downloading Erlang/OTP ${ERLANG_DIST_VERSION} from ${ERLANG_URL}" \
-    && curl -fsSL "${ERLANG_URL}" -o "/tmp/${ERLANG_TARBALL}" \
-    && curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS" \
-    && EXPECTED_SHA=$(grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | head -1 | awk '{print $1}') \
-    && echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c - \
-    && tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2 \
-    && rm "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" \
-    && ldconfig
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) ERLANG_ARCH='amd64' ;; \
+        arm64) ERLANG_ARCH='arm64' ;; \
+        *) echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    ERLANG_TARBALL="erlang-${ERLANG_DIST_VERSION}-linux-${ERLANG_ARCH}.tar.gz"; \
+    ERLANG_URL="https://github.com/benoitc/erlang-dist/releases/download/OTP-${ERLANG_DIST_VERSION}/${ERLANG_TARBALL}"; \
+    CHECKSUMS_URL="https://github.com/benoitc/erlang-dist/releases/download/OTP-${ERLANG_DIST_VERSION}/SHA256SUMS"; \
+    \
+    echo "Downloading Erlang/OTP ${ERLANG_DIST_VERSION} for ${ERLANG_ARCH}..."; \
+    curl -fsSL "${ERLANG_URL}" -o "/tmp/${ERLANG_TARBALL}"; \
+    curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS"; \
+    \
+    echo "Verifying checksum..."; \
+    EXPECTED_SHA=$(grep "^${ERLANG_TARBALL}$" "/tmp/SHA256SUMS" | awk '{print $1}' | head -n1); \
+    if [ -z "$EXPECTED_SHA" ]; then \
+        EXPECTED_SHA=$(grep " ${ERLANG_TARBALL}$" "/tmp/SHA256SUMS" | awk '{print $1}' | head -n1); \
+    fi; \
+    echo "Expected: ${EXPECTED_SHA}"; \
+    echo "Actual:   $(sha256sum "/tmp/${ERLANG_TARBALL}" | awk '{print $1}')"; \
+    echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c -; \
+    \
+    echo "Extracting..."; \
+    tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2; \
+    rm "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS"; \
+    ldconfig
 
 # Build and install Elixir
 WORKDIR /tmp/elixir
