@@ -6,75 +6,67 @@ ARG S6_OVERLAY_VERSION=3.2.0.0
 ARG OTP_VERSION=28.0
 ARG ELIXIR_VERSION=1.19.0
 ARG POSTGRES_VERSION=17
-ARG ERLANG_DIST_VERSION=28.4
 
 # ============================================================================
-# Stage 1: Elixir Builder (we still need to build Elixir)
+# Stage 1: Build Erlang and Elixir from source
 # ============================================================================
-FROM debian:${DEBIAN_VERSION} AS elixir-builder
+FROM debian:${DEBIAN_VERSION} AS builder
 
+ARG OTP_VERSION
 ARG ELIXIR_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies for Elixir
+# Install build dependencies (following erlang-dist build configuration)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    autoconf \
     curl \
     ca-certificates \
-    make \
+    libncurses5-dev \
+    libssl-dev \
+    libgl1-mesa-dev \
+    libglu1-mesa-dev \
+    libpng-dev \
+    libssh-dev \
+    unixodbc-dev \
+    xsltproc \
+    fop \
+    libxml2-utils \
     git \
+    && (apt-get install -y libwxgtk3.2-dev || apt-get install -y libwxgtk3.0-gtk3-dev || true) \
     && rm -rf /var/lib/apt/lists/*
 
-# Download and install pre-built Erlang from erlang-dist with checksum verification
-# Repository: https://github.com/benoitc/erlang-dist
-# The tarball structure is: erlang-VERSION/usr/local/{bin,lib,...}
-ARG ERLANG_DIST_VERSION
-ARG TARGETARCH
-
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-        amd64) ERLANG_ARCH='amd64' ;; \
-        arm64) ERLANG_ARCH='arm64' ;; \
-        *) echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    ERLANG_TARBALL="erlang-${ERLANG_DIST_VERSION}-linux-${ERLANG_ARCH}.tar.gz"; \
-    ERLANG_URL="https://github.com/benoitc/erlang-dist/releases/download/OTP-${ERLANG_DIST_VERSION}/${ERLANG_TARBALL}"; \
-    CHECKSUMS_URL="https://github.com/benoitc/erlang-dist/releases/download/OTP-${ERLANG_DIST_VERSION}/SHA256SUMS"; \
-    \
-    echo "Downloading Erlang/OTP ${ERLANG_DIST_VERSION} for ${ERLANG_ARCH}..."; \
-    curl -fsSL "${ERLANG_URL}" -o "/tmp/${ERLANG_TARBALL}"; \
-    curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS"; \
-    \
-    echo "Verifying checksum..."; \
-    ACTUAL_SHA=$(sha256sum "/tmp/${ERLANG_TARBALL}" | awk '{print $1}'); \
-    echo "Actual SHA256: ${ACTUAL_SHA}"; \
-    if ! grep -q "${ACTUAL_SHA}" "/tmp/SHA256SUMS"; then \
-        echo "ERROR: Checksum verification failed!"; \
-        echo "Downloaded file checksum not found in SHA256SUMS"; \
-        exit 1; \
-    fi; \
-    echo "Checksum verified successfully"; \
-    \
-    echo "Extracting to /usr/local..."; \
-    tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2; \
-    rm -rf "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS"; \
-    ldconfig
-
-# Set PATH to include Erlang binaries
-ENV PATH="/usr/local/bin:${PATH}"
+# Download and build Erlang/OTP (following erlang-dist build process)
+WORKDIR /tmp/otp_src
+RUN curl -fSL "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz" \
+    | tar -xz --strip-components=1 \
+    && export ERL_TOP=$(pwd) \
+    && ./configure \
+        --prefix=/usr/local \
+        --enable-threads \
+        --enable-smp-support \
+        --enable-kernel-poll \
+        --enable-ssl \
+        --enable-dynamic-ssl-lib \
+        --with-ssl \
+        --enable-jit \
+    && make -j$(nproc) \
+    && make DESTDIR=/tmp/install install
 
 # Verify Erlang installation
-RUN which erl && which erlc && erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell
+RUN /tmp/install/usr/local/bin/erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell
 
 # Build and install Elixir
 WORKDIR /tmp/elixir
 RUN curl -fsSL "https://github.com/elixir-lang/elixir/archive/v${ELIXIR_VERSION}.tar.gz" \
     | tar -xz --strip-components=1 \
-    && make compile \
-    && make install PREFIX=/usr/local
+    && PATH="/tmp/install/usr/local/bin:${PATH}" make compile \
+    && PATH="/tmp/install/usr/local/bin:${PATH}" make install PREFIX=/tmp/install/usr/local
 
 # Get Mix hex and rebar
-RUN mix local.hex --force && mix local.rebar --force
+RUN PATH="/tmp/install/usr/local/bin:${PATH}" /tmp/install/usr/local/bin/mix local.hex --force \
+    && PATH="/tmp/install/usr/local/bin:${PATH}" /tmp/install/usr/local/bin/mix local.rebar --force
 
 # ============================================================================
 # Stage 2: Runtime image
@@ -84,7 +76,6 @@ FROM debian:${DEBIAN_VERSION} AS runtime
 ARG S6_OVERLAY_VERSION
 ARG POSTGRES_VERSION
 ARG TARGETARCH
-ARG ERLANG_DIST_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -148,32 +139,8 @@ RUN S6_ARCH=$(cat /tmp/s6-arch) \
     && curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-symlinks-arch.tar.xz" \
     | tar -C / -Jxpf -
 
-# Download and install pre-built Erlang from erlang-dist with checksum verification
-# Repository: https://github.com/benoitc/erlang-dist
-RUN case "${TARGETARCH}" in \
-    amd64) ERLANG_ARCH="amd64" ;; \
-    arm64) ERLANG_ARCH="arm64" ;; \
-    *) ERLANG_ARCH="${TARGETARCH}" ;; \
-    esac \
-    && ERLANG_TARBALL="erlang-${ERLANG_DIST_VERSION}-linux-${ERLANG_ARCH}.tar.gz" \
-    && ERLANG_URL="https://github.com/benoitc/erlang-dist/releases/download/OTP-${ERLANG_DIST_VERSION}/${ERLANG_TARBALL}" \
-    && CHECKSUMS_URL="https://github.com/benoitc/erlang-dist/releases/download/OTP-${ERLANG_DIST_VERSION}/SHA256SUMS" \
-    && echo "Downloading Erlang/OTP ${ERLANG_DIST_VERSION} from ${ERLANG_URL}" \
-    && curl -fsSL "${ERLANG_URL}" -o "/tmp/${ERLANG_TARBALL}" \
-    && curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS" \
-    && ACTUAL_SHA=$(sha256sum "/tmp/${ERLANG_TARBALL}" | awk '{print $1}') \
-    && echo "Actual SHA256: ${ACTUAL_SHA}" \
-    && if ! grep -q "${ACTUAL_SHA}" "/tmp/SHA256SUMS"; then \
-        echo "ERROR: Checksum verification failed!"; \
-        exit 1; \
-    fi \
-    && echo "Checksum verified successfully" \
-    && tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2 \
-    && rm -rf "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" \
-    && ldconfig
-
-# Copy Elixir from builder
-COPY --from=elixir-builder /usr/local /usr/local
+# Copy Erlang and Elixir from builder
+COPY --from=builder /tmp/install/usr/local /usr/local
 
 # Create necessary directories
 RUN mkdir -p \
