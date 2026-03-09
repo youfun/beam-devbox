@@ -58,6 +58,12 @@ RUN set -eux; \
     rm "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS"; \
     ldconfig
 
+# Set PATH to include Erlang binaries
+ENV PATH="/usr/local/bin:${PATH}"
+
+# Verify Erlang installation
+RUN erl -version && erlc -version
+
 # Build and install Elixir
 WORKDIR /tmp/elixir
 RUN curl -fsSL "https://github.com/elixir-lang/elixir/archive/v${ELIXIR_VERSION}.tar.gz" \
