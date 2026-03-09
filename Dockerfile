@@ -2,7 +2,7 @@
 # Multi-stage build for Elixir/Phoenix development environment
 
 ARG DEBIAN_VERSION=bookworm-slim
-ARG S6_OVERLAY_VERSION=3.2.0.0
+ARG S6_OVERLAY_VERSION=3.2.2.0
 ARG OTP_VERSION=28.0
 ARG ELIXIR_VERSION=1.19.0
 ARG POSTGRES_VERSION=17
