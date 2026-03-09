@@ -52,7 +52,7 @@ RUN set -eux; \
     echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c -; \
     \
     echo "Extracting to /usr/local..."; \
-    tar -xzf "/tmp/${ERLANG_TARBALL}" -C / --strip-components=1; \
+    tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2; \
     rm -rf "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS"; \
     ldconfig
 
@@ -159,7 +159,7 @@ RUN case "${TARGETARCH}" in \
     && curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS" \
     && EXPECTED_SHA=$(grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | head -1 | awk '{print $1}') \
     && echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c - \
-    && tar -xzf "/tmp/${ERLANG_TARBALL}" -C / --strip-components=1 \
+    && tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2 \
     && rm -rf "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" \
     && ldconfig
 
