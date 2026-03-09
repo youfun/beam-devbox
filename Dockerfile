@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Download and install pre-built Erlang from erlang-dist with checksum verification
 # Repository: https://github.com/benoitc/erlang-dist
+# The tarball structure is: erlang-VERSION/usr/local/{bin,lib,...}
 ARG ERLANG_DIST_VERSION
 ARG TARGETARCH
 
@@ -54,8 +55,10 @@ RUN set -eux; \
     echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c -; \
     \
     echo "Extracting..."; \
-    tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2; \
-    rm "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS"; \
+    mkdir -p /tmp/erlang-extract; \
+    tar -xzf "/tmp/${ERLANG_TARBALL}" -C /tmp/erlang-extract; \
+    cp -r /tmp/erlang-extract/erlang-${ERLANG_DIST_VERSION}/usr/local/* /usr/local/; \
+    rm -rf "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" /tmp/erlang-extract; \
     ldconfig
 
 # Set PATH to include Erlang binaries
@@ -161,8 +164,10 @@ RUN case "${TARGETARCH}" in \
     && curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS" \
     && EXPECTED_SHA=$(grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | head -1 | awk '{print $1}') \
     && echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c - \
-    && tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2 \
-    && rm "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" \
+    && mkdir -p /tmp/erlang-extract \
+    && tar -xzf "/tmp/${ERLANG_TARBALL}" -C /tmp/erlang-extract \
+    && cp -r /tmp/erlang-extract/erlang-${ERLANG_DIST_VERSION}/usr/local/* /usr/local/ \
+    && rm -rf "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" /tmp/erlang-extract \
     && ldconfig
 
 # Copy Elixir from builder
