@@ -154,27 +154,125 @@ docker exec beam-devbox /app/bin/myapp start
 | `otp27` | 27 | 17 | OTP 27 with latest PostgreSQL |
 | `otp27-pg17` | 27 | 17 | OTP 27 with PostgreSQL 17 (pinned) |
 
-All images support both `linux/amd64` and `linux/arm64` architectures.
+All images support both `linux/amd64` and `linux/arm64` architectures (works on Apple Silicon Macs).
 
-## Hot Sync Workflow
+## Usage Scenarios
 
-For rapid development, use `hot_sync.sh` to sync your local changes to the running container:
+### Scenario 1: Local Development
+
+Run infrastructure (PostgreSQL + MinIO) in Docker, develop locally with `mix`:
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  infra:
+    image: ghcr.io/youfun/beam-devbox:otp28
+    ports:
+      - "5432:5432"  # PostgreSQL
+      - "9000:9000"  # MinIO
+      - "9001:9001"  # MinIO Console
+    environment:
+      POSTGRES_DB: myapp_dev
+      MINIO_BUCKET: uploads
+```
 
 ```bash
-# scripts/hot_sync.sh
-#!/bin/bash
-APP_NAME=${APP_NAME:-myapp}
-CONTAINER=${CONTAINER:-beam-devbox}
+# Terminal 1: Start infrastructure
+docker-compose up -d
 
-# Build locally
-mix compile
+# Terminal 2: Local development (fast hot reload)
+mix deps.get
+mix ecto.setup
+mix phx.server
+```
 
-# Sync .beam files to container
-rsync -avz _build/dev/lib/${APP_NAME}/ebin/ ${CONTAINER}:/app/lib/${APP_NAME}/
+**Best for:** Daily development, IDE debugging, fastest feedback loop.
 
-# Trigger hot reload (if your app supports it)
-docker exec ${CONTAINER} /app/bin/${APP_NAME} rpc "Application.stop(:${APP_NAME})"
-docker exec ${CONTAINER} /app/bin/${APP_NAME} rpc "Application.start(:${APP_NAME})"
+---
+
+### Scenario 2: Container-based Development
+
+Run everything inside the container for environment consistency:
+
+```yaml
+# docker-compose.dev.yml
+services:
+  app:
+    image: ghcr.io/youfun/beam-devbox:otp28
+    command: >
+      bash -c "
+        cd /app &&
+        mix local.hex --force &&
+        mix local.rebar --force &&
+        mix deps.get &&
+        mix ecto.setup &&
+        mix phx.server
+      "
+    volumes:
+      - .:/app
+      - elixir-deps:/app/deps
+      - elixir-build:/app/_build
+    ports:
+      - "4000:4000"
+      - "5432:5432"
+      - "9000:9000"
+```
+
+```bash
+docker-compose -f docker-compose.dev.yml up
+```
+
+**Best for:** Team consistency, onboarding new developers, CI-like environments.
+
+---
+
+### Scenario 3: Remote VPS Testing (hot_sync.sh)
+
+Deploy from local machine to remote VPS for testing in a production-like environment:
+
+```bash
+# 1. Build release locally
+MIX_ENV=prod mix release
+
+# 2. Deploy to remote VPS
+./scripts/hot_sync.sh myapp user@vps.example.com
+
+# Or deploy to remote container
+./scripts/hot_sync.sh myapp user@vps.example.com:beam-devbox
+```
+
+The `hot_sync.sh` script supports:
+- **Local container**: `hot_sync.sh myapp beam-devbox`
+- **Remote host** (with Docker): `hot_sync.sh myapp user@vps.example.com`
+- **Remote container**: `hot_sync.sh myapp user@vps.example.com:container-name`
+
+**Best for:** Testing on public IPs, simulating production, sharing demos with stakeholders.
+
+---
+
+### Scenario 4: CI/CD Testing
+
+Use in GitHub Actions for integration testing:
+
+```yaml
+jobs:
+  test:
+    services:
+      beam-devbox:
+        image: ghcr.io/youfun/beam-devbox:otp28
+        ports:
+          - 5432:5432
+          - 9000:9000
+    steps:
+      - uses: actions/checkout@v4
+      - run: mix deps.get
+      - run: mix test
+```
+
+---
+
+AINER} /app/bin/${APP_NAME} rpc "Application.start(:${APP_NAME})"
 ```
 
 ## Health Checks

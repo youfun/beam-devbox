@@ -154,28 +154,125 @@ docker exec beam-devbox /app/bin/myapp start
 | `otp27` | 27 | 17 | OTP 27 配最新 PostgreSQL |
 | `otp27-pg17` | 27 | 17 | OTP 27 配 PostgreSQL 17（固定版本） |
 
-所有镜像都支持 `linux/amd64` 和 `linux/arm64` 架构。
+所有镜像都支持 `linux/amd64` 和 `linux/arm64` 架构（支持 Apple Silicon Mac）。
 
-## 热同步工作流
+## 使用场景
 
-为了快速开发，使用 `hot_sync.sh` 将本地更改同步到运行中的容器：
+### 场景 1：本地开发
+
+基础设施（PostgreSQL + MinIO）运行在 Docker 中，本地使用 `mix` 开发：
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  infra:
+    image: ghcr.io/youfun/beam-devbox:otp28
+    ports:
+      - "5432:5432"  # PostgreSQL
+      - "9000:9000"  # MinIO
+      - "9001:9001"  # MinIO 控制台
+    environment:
+      POSTGRES_DB: myapp_dev
+      MINIO_BUCKET: uploads
+```
 
 ```bash
-# scripts/hot_sync.sh
-#!/bin/bash
-APP_NAME=${APP_NAME:-myapp}
-CONTAINER=${CONTAINER:-beam-devbox}
+# 终端 1：启动基础设施
+docker-compose up -d
 
-# 本地编译
-mix compile
-
-# 同步 .beam 文件到容器
-rsync -avz _build/dev/lib/${APP_NAME}/ebin/ ${CONTAINER}:/app/lib/${APP_NAME}/
-
-# 触发热重载（如果你的应用支持）
-docker exec ${CONTAINER} /app/bin/${APP_NAME} rpc "Application.stop(:${APP_NAME})"
-docker exec ${CONTAINER} /app/bin/${APP_NAME} rpc "Application.start(:${APP_NAME})"
+# 终端 2：本地开发（快速热重载）
+mix deps.get
+mix ecto.setup
+mix phx.server
 ```
+
+**适合：** 日常开发、IDE 调试、最快的反馈循环。
+
+---
+
+### 场景 2：基于容器的开发
+
+一切都在容器内运行，确保环境一致性：
+
+```yaml
+# docker-compose.dev.yml
+services:
+  app:
+    image: ghcr.io/youfun/beam-devbox:otp28
+    command: >
+      bash -c "
+        cd /app &&
+        mix local.hex --force &&
+        mix local.rebar --force &&
+        mix deps.get &&
+        mix ecto.setup &&
+        mix phx.server
+      "
+    volumes:
+      - .:/app
+      - elixir-deps:/app/deps
+      - elixir-build:/app/_build
+    ports:
+      - "4000:4000"
+      - "5432:5432"
+      - "9000:9000"
+```
+
+```bash
+docker-compose -f docker-compose.dev.yml up
+```
+
+**适合：** 团队协作、新成员入职、CI 一致的环境。
+
+---
+
+### 场景 3：远程 VPS 测试（hot_sync.sh）
+
+从本地机器部署到远程 VPS，在类生产环境中测试：
+
+```bash
+# 1. 本地构建 release
+MIX_ENV=prod mix release
+
+# 2. 部署到远程 VPS
+./scripts/hot_sync.sh myapp user@vps.example.com
+
+# 或部署到远程容器
+./scripts/hot_sync.sh myapp user@vps.example.com:beam-devbox
+```
+
+`hot_sync.sh` 脚本支持：
+- **本地容器**：`hot_sync.sh myapp beam-devbox`
+- **远程主机**（带 Docker）：`hot_sync.sh myapp user@vps.example.com`
+- **远程容器**：`hot_sync.sh myapp user@vps.example.com:容器名`
+
+**适合：** 公网 IP 测试、模拟生产环境、向利益相关者展示演示。
+
+---
+
+### 场景 4：CI/CD 测试
+
+在 GitHub Actions 中用于集成测试：
+
+```yaml
+jobs:
+  test:
+    services:
+      beam-devbox:
+        image: ghcr.io/youfun/beam-devbox:otp28
+        ports:
+          - 5432:5432
+          - 9000:9000
+    steps:
+      - uses: actions/checkout@v4
+      - run: mix deps.get
+      - run: mix test
+```
+
+---
+
+
 
 ## 健康检查
 

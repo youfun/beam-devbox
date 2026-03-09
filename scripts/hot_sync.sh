@@ -1,31 +1,63 @@
 #!/bin/bash
-# hot_sync.sh - 热同步本地 BEAM 文件到运行中的容器
+# hot_sync.sh - 本地编译，远程部署，热同步到运行中的容器
+#
+# 核心场景：
+#   1. 本地开发（利用本地 IDE、快速编译）
+#   2. 部署到远程 VPS 测试（模拟公网访问、线上环境）
+#   3. 热更新 BEAM 文件（无需重启容器）
 #
 # 使用方法:
-#   ./hot_sync.sh [应用名] [容器名]
+#   ./hot_sync.sh [应用名] [目标]
+#
+# 目标可以是:
+#   - 本地容器名: beam-devbox
+#   - 远程服务器: user@vps.example.com
+#   - 远程容器: user@vps.example.com:beam-devbox
 #
 # 环境变量:
-#   APP_NAME    - 应用名称 (默认: myapp)
-#   CONTAINER   - 容器名称 (默认: beam-devbox)
-#   BUILD_ENV   - 构建环境 (默认: dev)
-#   RSYNC_OPTS  - rsync 额外选项 (默认: -avz --delete)
+#   APP_NAME       - 应用名称 (默认: myapp)
+#   TARGET         - 部署目标 (默认: beam-devbox)
+#   BUILD_ENV      - 构建环境 (默认: dev)
+#   REMOTE_PATH    - 远程路径 (默认: /app)
+#   IDENTITY_FILE  - SSH 私钥路径 (可选)
+#
+# 示例:
+#   # 同步到本地容器
+#   ./hot_sync.sh myapp beam-devbox
+#
+#   # 同步到远程服务器（直接运行）
+#   ./hot_sync.sh myapp user@vps.example.com
+#
+#   # 同步到远程服务器的容器
+#   ./hot_sync.sh myapp user@vps.example.com:beam-devbox
+#
+#   # 使用特定私钥
+#   IDENTITY_FILE=~/.ssh/vps_key ./hot_sync.sh myapp user@vps.example.com
 
 set -e
 
+# =============================================================================
 # 配置
+# =============================================================================
 APP_NAME="${1:-${APP_NAME:-myapp}}"
-CONTAINER="${2:-${CONTAINER:-beam-devbox}}"
+TARGET="${2:-${TARGET:-beam-devbox}}"
 BUILD_ENV="${BUILD_ENV:-dev}"
-RSYNC_OPTS="${RSYNC_OPTS:--avz --delete}"
+REMOTE_PATH="${REMOTE_PATH:-/app}"
+SSH_OPTS="${SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null}"
+
+if [ -n "$IDENTITY_FILE" ]; then
+    SSH_OPTS="$SSH_OPTS -i $IDENTITY_FILE"
+fi
 
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 log_warn() {
@@ -36,17 +68,37 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# 检查容器是否运行
-check_container() {
-    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
-        log_error "容器 '${CONTAINER}' 未运行"
-        echo "请先启动容器: docker run -d --name ${CONTAINER} ghcr.io/youfun/beam-devbox:otp28"
-        exit 1
-    fi
-    log_info "容器 '${CONTAINER}' 运行中"
+log_success() {
+    echo -e "${GREEN}[OK]${NC} $1"
 }
 
+# =============================================================================
+# 解析目标
+# =============================================================================
+parse_target() {
+    local target="$1"
+
+    if [[ "$target" == *@* ]]; then
+        # 远程目标 (user@host 或 user@host:container)
+        REMOTE_HOST="${target%%:*}"
+        if [[ "$target" == *:* ]]; then
+            REMOTE_CONTAINER="${target##*:}"
+            DEPLOY_MODE="remote_container"
+        else
+            REMOTE_CONTAINER=""
+            DEPLOY_MODE="remote_direct"
+        fi
+    else
+        # 本地容器
+        REMOTE_HOST=""
+        REMOTE_CONTAINER="$target"
+        DEPLOY_MODE="local"
+    fi
+}
+
+# =============================================================================
 # 本地编译
+# =============================================================================
 compile_local() {
     log_info "本地编译 ${APP_NAME}..."
 
@@ -55,139 +107,292 @@ compile_local() {
         exit 1
     fi
 
-    mix deps.get
-    mix compile
+    MIX_ENV="$BUILD_ENV" mix deps.get
+    MIX_ENV="$BUILD_ENV" mix compile
 
     if [ $? -ne 0 ]; then
         log_error "编译失败"
         exit 1
     fi
 
-    log_info "编译完成"
+    log_success "编译完成"
 }
 
-# 同步 .beam 文件到容器
-sync_beams() {
-    log_info "同步 .beam 文件到容器..."
+# =============================================================================
+# 构建 Release（用于远程部署）
+# =============================================================================
+build_release() {
+    log_info "构建 release..."
 
-    local beam_source="_build/${BUILD_ENV}/lib/${APP_NAME}/ebin/"
-    local beam_dest="${CONTAINER}:/app/lib/${APP_NAME}/"
+    MIX_ENV="prod" mix deps.get --only prod
+    MIX_ENV="prod" mix compile
+    MIX_ENV="prod" mix assets.deploy 2>/dev/null || true
+    MIX_ENV="prod" mix release
 
-    if [ ! -d "${beam_source}" ]; then
-        log_error "未找到 BEAM 文件目录: ${beam_source}"
+    if [ $? -ne 0 ]; then
+        log_error "Release 构建失败"
         exit 1
     fi
 
-    # 确保目标目录存在
-    docker exec "${CONTAINER}" mkdir -p "/app/lib/${APP_NAME}"
-
-    # 使用 rsync 通过 docker cp 的替代方法
-    # 由于 docker cp 不支持 rsync 协议，我们使用 tar 流
-    tar -czf - -C "${beam_source}" . | docker exec -i "${CONTAINER}" tar -xzf - -C "/app/lib/${APP_NAME}/"
-
-    log_info "同步完成"
+    log_success "Release 构建完成"
 }
 
-# 同步整个 release
-sync_release() {
-    log_info "同步 release 到容器..."
+# =============================================================================
+# 同步到本地容器
+# =============================================================================
+sync_to_local_container() {
+    local container="$1"
 
-    local release_tar="_build/${BUILD_ENV}/${APP_NAME}-*.tar.gz"
+    log_info "同步到本地容器: $container"
 
-    if ls ${release_tar} 1> /dev/null 2>&1; then
-        local tar_file=$(ls -t ${release_tar} | head -n1)
-        log_info "找到 release: ${tar_file}"
+    # 检查容器是否运行
+    if ! docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+        log_error "容器 '$container' 未运行"
+        echo "请先启动: docker run -d --name ${container} ghcr.io/youfun/beam-devbox:otp28"
+        exit 1
+    fi
 
-        docker cp "${tar_file}" "${CONTAINER}:/app/${APP_NAME}.tar.gz"
-        docker exec "${CONTAINER}" bash -c "cd /app && tar -xzf ${APP_NAME}.tar.gz && rm ${APP_NAME}.tar.gz"
+    # 同步 .beam 文件
+    local beam_source="_build/${BUILD_ENV}/lib/${APP_NAME}/ebin/"
+    if [ -d "$beam_source" ]; then
+        log_info "同步 .beam 文件..."
+        docker exec "$container" mkdir -p "${REMOTE_PATH}/lib/${APP_NAME}"
+        tar -czf - -C "$beam_source" . | docker exec -i "$container" tar -xzf - -C "${REMOTE_PATH}/lib/${APP_NAME}/"
+    fi
 
-        log_info "Release 同步完成"
+    # 同步 release（如果存在）
+    local release_tar="_build/prod/${APP_NAME}-*.tar.gz"
+    if ls $release_tar 1>/dev/null 2>&1; then
+        local tar_file=$(ls -t $release_tar | head -n1)
+        log_info "同步 release: $(basename $tar_file)"
+        docker cp "$tar_file" "${container}:${REMOTE_PATH}/${APP_NAME}.tar.gz"
+        docker exec "$container" bash -c "cd ${REMOTE_PATH} && tar -xzf ${APP_NAME}.tar.gz && rm ${APP_NAME}.tar.gz"
+    fi
+
+    log_success "同步完成"
+}
+
+# =============================================================================
+# 同步到远程服务器（直接运行）
+# =============================================================================
+sync_to_remote_direct() {
+    local host="$1"
+
+    log_info "部署到远程服务器: $host"
+
+    # 检查 SSH 连接
+    if ! ssh $SSH_OPTS "$host" "echo OK" >/dev/null 2>&1; then
+        log_error "无法连接到 $host"
+        echo "请确保:"
+        echo "  1. SSH 密钥已添加到远程服务器"
+        echo "  2. 服务器地址正确"
+        exit 1
+    fi
+
+    # 检查远程是否有 beam-devbox
+    if ! ssh $SSH_OPTS "$host" "which erl" >/dev/null 2>&1; then
+        log_warn "远程服务器没有 Erlang/OTP，尝试使用 Docker..."
+
+        # 检查远程 Docker
+        if ! ssh $SSH_OPTS "$host" "docker ps" >/dev/null 2>&1; then
+            log_error "远程服务器既没有 Erlang 也没有 Docker"
+            exit 1
+        fi
+
+        # 在远程启动容器
+        log_info "在远程启动 beam-devbox 容器..."
+        ssh $SSH_OPTS "$host" "docker run -d --name ${APP_NAME}-dev -p 4000:4000 -p 5432:5432 -p 9000:9000 ghcr.io/youfun/beam-devbox:otp28 2>/dev/null || docker start ${APP_NAME}-dev 2>/dev/null || true"
+
+        # 递归调用，改为容器模式
+        REMOTE_CONTAINER="${APP_NAME}-dev"
+        sync_to_remote_container "$host" "$REMOTE_CONTAINER"
+        return
+    fi
+
+    # 直接同步 release 到远程
+    local release_tar="_build/prod/${APP_NAME}-*.tar.gz"
+    if ls $release_tar 1>/dev/null 2>&1; then
+        local tar_file=$(ls -t $release_tar | head -n1)
+        log_info "上传 release 到远程..."
+
+        # 创建远程目录
+        ssh $SSH_OPTS "$host" "mkdir -p ${REMOTE_PATH}"
+
+        # 上传并解压
+        scp $SSH_OPTS "$tar_file" "$host:${REMOTE_PATH}/${APP_NAME}.tar.gz"
+        ssh $SSH_OPTS "$host" "cd ${REMOTE_PATH} && tar -xzf ${APP_NAME}.tar.gz && rm ${APP_NAME}.tar.gz"
+
+        log_success "部署完成"
+
+        # 重启远程服务
+        log_info "重启远程服务..."
+        ssh $SSH_OPTS "$host" "cd ${REMOTE_PATH} && bin/${APP_NAME} restart 2>/dev/null || bin/${APP_NAME} start"
     else
-        log_warn "未找到 release tar 包，跳过 release 同步"
+        log_error "未找到 release 文件，请先运行: mix release"
+        exit 1
     fi
 }
 
-# 热重载应用 (如果应用已在运行)
-hot_reload() {
-    log_info "尝试热重载应用..."
+# =============================================================================
+# 同步到远程容器
+# =============================================================================
+sync_to_remote_container() {
+    local host="$1"
+    local container="$2"
 
-    # 检查应用是否已在运行
-    if docker exec "${CONTAINER}" pgrep -f "/app/bin/${APP_NAME}" > /dev/null 2>&1; then
-        log_info "应用正在运行，执行热重载..."
+    log_info "部署到远程容器: $host:$container"
 
-        # 尝试 graceful 重启
-        docker exec "${CONTAINER}" "/app/bin/${APP_NAME}" restart || {
-            log_warn "Graceful 重启失败，尝试 stop/start..."
-            docker exec "${CONTAINER}" "/app/bin/${APP_NAME}" stop || true
-            sleep 2
-            docker exec "${CONTAINER}" "/app/bin/${APP_NAME}" start
-        }
-    else
-        log_info "应用未运行，尝试启动..."
-        docker exec "${CONTAINER}" "/app/bin/${APP_NAME}" start || {
-            log_warn "启动失败，请检查应用配置"
-        }
+    # 检查远程容器
+    if ! ssh $SSH_OPTS "$host" "docker ps --format '{{.Names}}' | grep -q '^${container}$'"; then
+        log_warn "远程容器未运行，尝试启动..."
+        ssh $SSH_OPTS "$host" "docker run -d --name ${container} -p 4000:4000 -p 5432:5432 -p 9000:9000 ghcr.io/youfun/beam-devbox:otp28 2>/dev/null || docker start ${container} 2>/dev/null || true"
+        sleep 5
+    fi
+
+    # 同步 .beam 文件（开发模式）
+    local beam_source="_build/${BUILD_ENV}/lib/${APP_NAME}/ebin/"
+    if [ "$BUILD_ENV" = "dev" ] && [ -d "$beam_source" ]; then
+        log_info "同步 .beam 文件到远程容器..."
+
+        # 创建 tar 并上传到远程，再导入容器
+        tar -czf "/tmp/${APP_NAME}-beams.tar.gz" -C "$beam_source" .
+        scp $SSH_OPTS "/tmp/${APP_NAME}-beams.tar.gz" "$host:/tmp/"
+        ssh $SSH_OPTS "$host" "docker exec ${container} mkdir -p ${REMOTE_PATH}/lib/${APP_NAME} && cat /tmp/${APP_NAME}-beams.tar.gz | docker exec -i ${container} tar -xzf - -C ${REMOTE_PATH}/lib/${APP_NAME}/"
+        rm -f "/tmp/${APP_NAME}-beams.tar.gz"
+
+        log_success "热同步完成"
+    fi
+
+    # 同步 release（生产模式）
+    local release_tar="_build/prod/${APP_NAME}-*.tar.gz"
+    if ls $release_tar 1>/dev/null 2>&1; then
+        local tar_file=$(ls -t $release_tar | head -n1)
+        log_info "同步 release 到远程容器..."
+
+        scp $SSH_OPTS "$tar_file" "$host:/tmp/${APP_NAME}.tar.gz"
+        ssh $SSH_OPTS "$host" "docker cp /tmp/${APP_NAME}.tar.gz ${container}:${REMOTE_PATH}/ && docker exec ${container} bash -c 'cd ${REMOTE_PATH} && tar -xzf ${APP_NAME}.tar.gz && rm ${APP_NAME}.tar.gz'"
+
+        # 重启远程容器中的应用
+        log_info "重启远程应用..."
+        ssh $SSH_OPTS "$host" "docker exec ${container} bash -c '${REMOTE_PATH}/bin/${APP_NAME} restart 2>/dev/null || ${REMOTE_PATH}/bin/${APP_NAME} start'"
+
+        log_success "Release 部署完成"
     fi
 }
 
+# =============================================================================
+# 显示状态
+# =============================================================================
+show_status() {
+    log_info "部署状态:"
+    echo ""
+
+    case "$DEPLOY_MODE" in
+        local)
+            docker ps --filter "name=$REMOTE_CONTAINER" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            ;;
+        remote_direct)
+            ssh $SSH_OPTS "$REMOTE_HOST" "ps aux | grep beam.smp | grep -v grep || echo 'BEAM not running'"
+            ;;
+        remote_container)
+            ssh $SSH_OPTS "$REMOTE_HOST" "docker ps --filter name=$REMOTE_CONTAINER --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+            ;;
+    esac
+}
+
+# =============================================================================
+# 使用说明
+# =============================================================================
+usage() {
+    cat << 'EOF'
+hot_sync.sh - 本地编译，远程部署，热同步
+
+使用方法:
+  ./hot_sync.sh [应用名] [目标]
+
+目标格式:
+  本地容器:  beam-devbox
+  远程主机:  user@vps.example.com
+  远程容器:  user@vps.example.com:beam-devbox
+
+示例:
+  # 本地开发热同步
+  ./hot_sync.sh myapp beam-devbox
+
+  # 部署到远程 VPS 测试
+  ./hot_sync.sh myapp user@vps.example.com
+
+  # 部署到远程的特定容器
+  ./hot_sync.sh myapp user@vps.example.com:myapp-dev
+
+  # 使用特定 SSH 密钥
+  IDENTITY_FILE=~/.ssh/vps ./hot_sync.sh myapp user@vps.example.com
+
+环境变量:
+  APP_NAME       - 应用名称 (默认: myapp)
+  BUILD_ENV      - 构建环境: dev|prod (默认: dev)
+  REMOTE_PATH    - 远程部署路径 (默认: /app)
+  IDENTITY_FILE  - SSH 私钥路径
+
+EOF
+    exit 0
+}
+
+# =============================================================================
 # 主函数
+# =============================================================================
 main() {
     echo "========================================"
     echo "       beam-devbox 热同步工具"
     echo "========================================"
     echo ""
 
-    check_container
-    compile_local
-    sync_beams
-    sync_release
-    hot_reload
+    # 解析参数
+    parse_target "$TARGET"
+
+    log_info "应用: $APP_NAME"
+    log_info "目标: $TARGET"
+    log_info "模式: $DEPLOY_MODE"
+    echo ""
+
+    # 编译
+    if [ "$BUILD_ENV" = "prod" ]; then
+        build_release
+    else
+        compile_local
+    fi
+
+    # 部署
+    case "$DEPLOY_MODE" in
+        local)
+            sync_to_local_container "$REMOTE_CONTAINER"
+            ;;
+        remote_direct)
+            sync_to_remote_direct "$REMOTE_HOST"
+            ;;
+        remote_container)
+            sync_to_remote_container "$REMOTE_HOST" "$REMOTE_CONTAINER"
+            ;;
+    esac
 
     echo ""
-    log_info "热同步完成!"
+    show_status
     echo ""
-    echo "容器状态:"
-    docker ps --filter "name=${CONTAINER}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    log_success "完成!"
 }
 
 # 解析命令行参数
-usage() {
-    echo "用法: $0 [选项] [应用名] [容器名]"
-    echo ""
-    echo "选项:"
-    echo "  -h, --help      显示帮助信息"
-    echo "  -b, --build     仅编译，不同步"
-    echo "  -s, --sync      仅同步，不编译"
-    echo "  -n, --no-reload 不同步后不重载"
-    echo ""
-    echo "示例:"
-    echo "  $0                          # 使用默认值"
-    echo "  $0 myapp beam-devbox        # 指定应用和容器名"
-    echo "  $0 -s                       # 仅同步"
-    exit 0
-}
-
-# 解析参数
-DO_COMPILE=true
-DO_SYNC=true
-DO_RELOAD=true
-
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
             usage
             ;;
-        -b|--build)
-            DO_SYNC=false
-            DO_RELOAD=false
+        -r|--release)
+            BUILD_ENV="prod"
             shift
             ;;
-        -s|--sync)
-            DO_COMPILE=false
-            shift
-            ;;
-        -n|--no-reload)
-            DO_RELOAD=false
+        -d|--dev)
+            BUILD_ENV="dev"
             shift
             ;;
         -*)
@@ -200,30 +405,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 重新设置位置参数
+# 设置位置参数
 if [ $# -ge 1 ]; then
     APP_NAME="$1"
 fi
 if [ $# -ge 2 ]; then
-    CONTAINER="$2"
+    TARGET="$2"
 fi
 
 # 执行
-if [ "$DO_COMPILE" = true ] && [ "$DO_SYNC" = true ] && [ "$DO_RELOAD" = true ]; then
-    main
-else
-    check_container
-
-    if [ "$DO_COMPILE" = true ]; then
-        compile_local
-    fi
-
-    if [ "$DO_SYNC" = true ]; then
-        sync_beams
-        sync_release
-    fi
-
-    if [ "$DO_RELOAD" = true ]; then
-        hot_reload
-    fi
-fi
+main

@@ -41,7 +41,8 @@ RUN case "${TARGETARCH}" in \
     && echo "Downloading Erlang/OTP ${ERLANG_DIST_VERSION} from ${ERLANG_URL}" \
     && curl -fsSL "${ERLANG_URL}" -o "/tmp/${ERLANG_TARBALL}" \
     && curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS" \
-    && grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | sha256sum -c - \
+    && EXPECTED_SHA=$(grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | head -1 | awk '{print $1}') \
+    && echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c - \
     && tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2 \
     && rm "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" \
     && ldconfig
@@ -141,7 +142,8 @@ RUN case "${TARGETARCH}" in \
     && echo "Downloading Erlang/OTP ${ERLANG_DIST_VERSION} from ${ERLANG_URL}" \
     && curl -fsSL "${ERLANG_URL}" -o "/tmp/${ERLANG_TARBALL}" \
     && curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS" \
-    && grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | sha256sum -c - \
+    && EXPECTED_SHA=$(grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | head -1 | awk '{print $1}') \
+    && echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c - \
     && tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2 \
     && rm "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" \
     && ldconfig
