@@ -193,10 +193,9 @@ RUN groupadd -r postgres --gid=999 \
 # Copy s6 service definitions and scripts
 COPY s6-overlay/ /etc/s6-overlay/s6-rc.d/
 COPY scripts/ /etc/s6-overlay/scripts/
-COPY init/ /etc/s6-overlay/init/
 
 # Make scripts executable
-RUN chmod -R +x /etc/s6-overlay/scripts/ /etc/s6-overlay/init/
+RUN chmod -R +x /etc/s6-overlay/scripts/
 
 # Create bundle directory for s6-rc
 RUN mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d \
