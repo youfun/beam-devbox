@@ -82,14 +82,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8 \
     HOME=/root
 
-# Install s6-overlay architecture mapping
-RUN case "${TARGETARCH}" in \
-    amd64) S6_ARCH=x86_64 ;; \
-    arm64) S6_ARCH=aarch64 ;; \
-    *) S6_ARCH=${TARGETARCH} ;; \
-    esac \
-    && echo "S6_ARCH=${S6_ARCH}" > /tmp/s6-arch
-
 # Install base system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -127,7 +119,11 @@ RUN apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install s6-overlay
-RUN S6_ARCH=$(cat /tmp/s6-arch) \
+RUN case "${TARGETARCH}" in \
+    amd64) S6_ARCH=x86_64 ;; \
+    arm64) S6_ARCH=aarch64 ;; \
+    *) S6_ARCH=${TARGETARCH} ;; \
+    esac \
     && curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz" \
     | tar -C / -Jxpf - \
     && curl -fsSL "https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz" \
