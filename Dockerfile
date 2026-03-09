@@ -46,10 +46,14 @@ RUN set -eux; \
     curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS"; \
     \
     echo "Verifying checksum..."; \
-    EXPECTED_SHA=$(grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | head -1 | awk '{print $1}'); \
-    echo "Expected: ${EXPECTED_SHA}"; \
-    echo "Actual:   $(sha256sum "/tmp/${ERLANG_TARBALL}" | awk '{print $1}')"; \
-    echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c -; \
+    ACTUAL_SHA=$(sha256sum "/tmp/${ERLANG_TARBALL}" | awk '{print $1}'); \
+    echo "Actual SHA256: ${ACTUAL_SHA}"; \
+    if ! grep -q "${ACTUAL_SHA}" "/tmp/SHA256SUMS"; then \
+        echo "ERROR: Checksum verification failed!"; \
+        echo "Downloaded file checksum not found in SHA256SUMS"; \
+        exit 1; \
+    fi; \
+    echo "Checksum verified successfully"; \
     \
     echo "Extracting to /usr/local..."; \
     tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2; \
@@ -157,8 +161,13 @@ RUN case "${TARGETARCH}" in \
     && echo "Downloading Erlang/OTP ${ERLANG_DIST_VERSION} from ${ERLANG_URL}" \
     && curl -fsSL "${ERLANG_URL}" -o "/tmp/${ERLANG_TARBALL}" \
     && curl -fsSL "${CHECKSUMS_URL}" -o "/tmp/SHA256SUMS" \
-    && EXPECTED_SHA=$(grep "${ERLANG_TARBALL}" "/tmp/SHA256SUMS" | head -1 | awk '{print $1}') \
-    && echo "${EXPECTED_SHA}  /tmp/${ERLANG_TARBALL}" | sha256sum -c - \
+    && ACTUAL_SHA=$(sha256sum "/tmp/${ERLANG_TARBALL}" | awk '{print $1}') \
+    && echo "Actual SHA256: ${ACTUAL_SHA}" \
+    && if ! grep -q "${ACTUAL_SHA}" "/tmp/SHA256SUMS"; then \
+        echo "ERROR: Checksum verification failed!"; \
+        exit 1; \
+    fi \
+    && echo "Checksum verified successfully" \
     && tar -xzf "/tmp/${ERLANG_TARBALL}" -C /usr/local --strip-components=2 \
     && rm -rf "/tmp/${ERLANG_TARBALL}" "/tmp/SHA256SUMS" \
     && ldconfig
