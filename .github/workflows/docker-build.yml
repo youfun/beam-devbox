@@ -204,18 +204,34 @@ jobs:
           # Define image name
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
 
-          # Create manifests for each tag
+          # List available images first
+          echo "Available images:"
+          crane ls "${IMAGE}" || echo "No images found yet"
+
+          # Create manifests for each tag (only if both arch images exist)
           for tag in otp28 otp28-pg17 otp28-pg18 otp27 otp27-pg17 otp27-pg18 latest; do
-            echo "Creating manifest for ${IMAGE}:${tag}..."
-            crane index append \
-              -t "${IMAGE}:${tag}" \
-              --platform linux/amd64 "${IMAGE}:${tag}-amd64" \
-              --platform linux/arm64 "${IMAGE}:${tag}-arm64" || echo "Skipping ${tag} (may not exist)"
+            echo "Checking for ${IMAGE}:${tag}-amd64 and ${IMAGE}:${tag}-arm64..."
+            
+            # Check if both architecture images exist
+            if crane manifest "${IMAGE}:${tag}-amd64" >/dev/null 2>&1 && \
+               crane manifest "${IMAGE}:${tag}-arm64" >/dev/null 2>&1; then
+              echo "Creating manifest for ${IMAGE}:${tag}..."
+              crane index append \
+                -t "${IMAGE}:${tag}" \
+                --platform linux/amd64 "${IMAGE}:${tag}-amd64" \
+                --platform linux/arm64 "${IMAGE}:${tag}-arm64"
+              echo "✓ Created manifest for ${tag}"
+            else
+              echo "⚠ Skipping ${tag} (one or both arch images not found)"
+            fi
           done
+          
+          echo "Final image list:"
+          crane ls "${IMAGE}"
 
   test:
     runs-on: ubuntu-latest
-    needs: manifest
+    needs: build
     if: github.event_name != 'pull_request'
     permissions:
       packages: read
@@ -227,14 +243,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: List available images
+        run: |
+          echo "Checking available images..."
+          docker pull ghcr.io/${{ github.repository_owner }}/beam-devbox:otp28-amd64 || echo "otp28-amd64 not found"
+          docker pull ghcr.io/${{ github.repository_owner }}/beam-devbox:otp28 || echo "otp28 manifest not found"
+          docker images | grep beam-devbox
+
       - name: Test Docker image
         run: |
+          # Try manifest first, fallback to amd64
+          IMAGE="ghcr.io/${{ github.repository_owner }}/beam-devbox:otp28"
+          if ! docker pull "$IMAGE" 2>/dev/null; then
+            echo "Manifest not found, using amd64 image"
+            IMAGE="ghcr.io/${{ github.repository_owner }}/beam-devbox:otp28-amd64"
+            docker pull "$IMAGE"
+          fi
+          
           # Start the container
           docker run -d --name test-beam-devbox \
             -p 5432:5432 \
             -p 9000:9000 \
             -p 9001:9001 \
-            ghcr.io/${{ github.repository_owner }}/beam-devbox:otp28
+            "$IMAGE"
 
           # Wait for services to be ready
           echo "Waiting for services to start..."
