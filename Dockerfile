@@ -171,6 +171,11 @@ ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/lib/postgresql/${POSTGRES_VERSION}
     S6_SERVICES_GRACETIME=10000 \
     S6_KILL_GRACETIME=5000
 
+# Add labels for better discoverability
+LABEL org.opencontainers.image.source="https://github.com/youfun/dokcer" \
+      org.opencontainers.image.description="BEAM development environment with PostgreSQL and MinIO" \
+      org.opencontainers.image.licenses="MIT"
+
 # Create postgres user and set permissions (if not already exists from postgresql package)
 RUN if ! getent group postgres > /dev/null 2>&1; then \
         groupadd -r postgres --gid=999; \
