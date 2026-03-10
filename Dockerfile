@@ -171,9 +171,13 @@ ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/lib/postgresql/${POSTGRES_VERSION}
     S6_SERVICES_GRACETIME=10000 \
     S6_KILL_GRACETIME=5000
 
-# Create postgres user and set permissions
-RUN groupadd -r postgres --gid=999 \
-    && useradd -r -g postgres --uid=999 --home-dir=/var/lib/postgresql postgres \
+# Create postgres user and set permissions (if not already exists from postgresql package)
+RUN if ! getent group postgres > /dev/null 2>&1; then \
+        groupadd -r postgres --gid=999; \
+    fi \
+    && if ! getent passwd postgres > /dev/null 2>&1; then \
+        useradd -r -g postgres --uid=999 --home-dir=/var/lib/postgresql postgres; \
+    fi \
     && chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql \
     && chmod 2777 /var/run/postgresql
 
