@@ -216,10 +216,12 @@ jobs:
             if crane manifest "${IMAGE}:${tag}-amd64" >/dev/null 2>&1 && \
                crane manifest "${IMAGE}:${tag}-arm64" >/dev/null 2>&1; then
               echo "Creating manifest for ${IMAGE}:${tag}..."
-              crane index append \
-                -t "${IMAGE}:${tag}" \
-                --platform linux/amd64 "${IMAGE}:${tag}-amd64" \
-                --platform linux/arm64 "${IMAGE}:${tag}-arm64"
+              
+              # Use docker buildx imagetools to create multi-arch manifest
+              docker buildx imagetools create -t "${IMAGE}:${tag}" \
+                "${IMAGE}:${tag}-amd64" \
+                "${IMAGE}:${tag}-arm64"
+              
               echo "✓ Created manifest for ${tag}"
             else
               echo "⚠ Skipping ${tag} (one or both arch images not found)"
