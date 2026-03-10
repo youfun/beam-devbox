@@ -52,23 +52,21 @@ RUN curl -fSL "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION
         --with-ssl \
         --enable-jit \
     && make -j$(nproc) \
-    && make DESTDIR=/tmp/install install
+    && make install
 
-# Verify Erlang installation (skip verification in DESTDIR, will verify in runtime stage)
-RUN test -f /tmp/install/usr/local/bin/erl && \
-    test -f /tmp/install/usr/local/bin/erlc && \
-    echo "Erlang binaries installed successfully"
+# Verify Erlang installation
+RUN erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell
 
 # Build and install Elixir
 WORKDIR /tmp/elixir
 RUN curl -fsSL "https://github.com/elixir-lang/elixir/archive/v${ELIXIR_VERSION}.tar.gz" \
     | tar -xz --strip-components=1 \
-    && PATH="/tmp/install/usr/local/bin:${PATH}" make compile \
-    && PATH="/tmp/install/usr/local/bin:${PATH}" make install PREFIX=/tmp/install/usr/local
+    && make compile \
+    && make install PREFIX=/usr/local
 
 # Get Mix hex and rebar
-RUN PATH="/tmp/install/usr/local/bin:${PATH}" /tmp/install/usr/local/bin/mix local.hex --force \
-    && PATH="/tmp/install/usr/local/bin:${PATH}" /tmp/install/usr/local/bin/mix local.rebar --force
+RUN mix local.hex --force \
+    && mix local.rebar --force
 
 # ============================================================================
 # Stage 2: Runtime image
@@ -136,7 +134,7 @@ RUN case "${TARGETARCH}" in \
     | tar -C / -Jxpf -
 
 # Copy Erlang and Elixir from builder
-COPY --from=builder /tmp/install/usr/local /usr/local
+COPY --from=builder /usr/local /usr/local
 
 # Create necessary directories
 RUN mkdir -p \
